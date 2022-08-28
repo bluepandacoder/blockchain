@@ -1,6 +1,9 @@
 pub mod p2p;
 pub mod blockchain;
+pub mod mining;
 
+pub use serde::{Serialize, Deserialize};
+pub use std::sync::{Mutex, Arc};
 pub use async_std::{io, task};
 pub use futures::{
     prelude::{stream::StreamExt, *},
@@ -13,6 +16,7 @@ pub use libp2p::{
     swarm::SwarmEvent,
     Multiaddr, NetworkBehaviour, PeerId, Swarm,
 };
+pub use std::thread;
 pub use std::error::Error;
 pub use blockchain::BlockChain;
 pub use blockchain::Block;

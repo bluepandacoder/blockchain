@@ -1,64 +1,40 @@
 
 mod p2p;
 
-use std::sync::{Mutex, Arc};
 
-use crypto_lib::*;
+use crypto_lib::{*, future::FusedFuture};
 use p2p::NetworkManager;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut app = App::new().await?;
+    let mining_block = Arc::new(Mutex::new(Block {mined: false}));
+    let active_blockchain = Arc::new(Mutex::new(BlockChain::default()));
+
+    let blockchain_topic = floodsub::Topic::new("blockchain");
+    let transactions_topic = floodsub::Topic::new("transactions");
+
+    let mut network_manager = NetworkManager::start(vec![blockchain_topic.clone(), transactions_topic.clone()]).await?;
+
+    let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
+
+    let mut block_miner = BlockMiner::start(mining_block.clone());
 
     // Kick it off
     loop {
-        app.update().await;
-    }
-}
-
-
-struct App {
-    mining_block: Arc<Mutex<Block>>,
-    active_blockchain: BlockChain,
-    network_manager: NetworkManager,
-    blockchain_topic: floodsub::Topic,
-    transactions_topic: floodsub::Topic,
-}
-
-impl App {
-    async fn new() -> Result<Self, Box<dyn Error>> {
-        let mining_block = Arc::new(Mutex::new(Block {}));
-        let active_blockchain = BlockChain {};
-
-        let blockchain_topic = floodsub::Topic::new("blockchain");
-        let transactions_topic = floodsub::Topic::new("transactions");
-
-        let network_manager = NetworkManager::start(vec![blockchain_topic.clone(), transactions_topic.clone()]).await?;
-
-
-        Ok (
-            Self {
-                mining_block,
-                active_blockchain,
-                blockchain_topic,
-                transactions_topic,
-                network_manager,
-            }
-        )
-    }
-
-    async fn update(&mut self) {
-        let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
-
         select! {
-            line = stdin.select_next_some() => self.network_manager.swarm
+            _ = block_miner => {
+                println!("block mined");
+                let block = mining_block.lock().unwrap();
+                let mut blockchain = active_blockchain.lock().unwrap();
+                blockchain.push(block.clone());
+                network_manager.swarm.behaviour_mut().floodsub
+                .publish(blockchain_topic.clone(), bincode::serialize(&(blockchain.clone())).unwrap())
+            },
+            line = stdin.select_next_some() => network_manager.swarm
                 .behaviour_mut()
                 .floodsub
-                .publish(self.blockchain_topic.clone(), line.expect("Stdin not to close").as_bytes()),
-            _ = mine_block(self.mining_block.clone()) => {
-                
-            },
-            event = self.network_manager.swarm.select_next_some() => match event {
+                .publish(blockchain_topic.clone(), line.expect("Stdin not to close").as_bytes()),
+            event = network_manager.swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     println!("Listening on {:?}", address);
                 }
@@ -72,12 +48,14 @@ impl App {
                         message.topics
                     );
                     let topic = &message.topics[0];
-                    if topic == &self.blockchain_topic {
-                        self.handle_blockchain(message.data);
+                    let mining_block_copy = mining_block.clone();
+                    if topic == &blockchain_topic {
+                        let active_blockchain_copy = active_blockchain.clone();
+                        thread::spawn(move || handle_blockchain(active_blockchain_copy, mining_block_copy, message.data));
                         println!("message on blockchain topic");
                     }
-                    else if topic == &self.transactions_topic {
-                        self.handle_transaction(message.data);
+                    else if topic == &transactions_topic {
+                        thread::spawn(move || handle_transaction(mining_block_copy, message.data));
                         println!("message on transactions topic");
                     }
                 }
@@ -85,7 +63,7 @@ impl App {
                     MdnsEvent::Discovered(list)
                 )) => {
                     for (peer, _) in list {
-                        self.network_manager.swarm
+                        network_manager.swarm
                             .behaviour_mut()
                             .floodsub
                             .add_node_to_partial_view(peer);
@@ -95,8 +73,8 @@ impl App {
                     list
                 ))) => {
                     for (peer, _) in list {
-                        if !self.network_manager.swarm.behaviour_mut().mdns.has_node(&peer) {
-                            self.network_manager.swarm
+                        if !network_manager.swarm.behaviour_mut().mdns.has_node(&peer) {
+                            network_manager.swarm
                                 .behaviour_mut()
                                 .floodsub
                                 .remove_node_from_partial_view(&peer);
@@ -107,18 +85,49 @@ impl App {
             }
         }
     }
-
-    fn handle_transaction(&mut self, data: Vec<u8>) {
-
-    }
-
-    fn handle_blockchain(&mut self, data: Vec<u8>) {
-
-    }
-
 }
 
-async fn mine_block(block: Arc<Mutex<Block>>) {
-
+struct BlockMiner {
+    block: Arc<Mutex<Block>>
 }
 
+impl BlockMiner {
+    pub fn start(block: Arc<Mutex<Block>>) -> Self {
+        mining::mine_block_multithreaded(block.clone());
+        Self {
+            block
+        }
+    }
+}
+
+impl Future for BlockMiner {
+    type Output=();
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        let block = self.block.lock().unwrap();
+        if block.mined { task::Poll::Ready(()) } else { task::Poll::Pending }
+    }
+}
+
+impl FusedFuture for BlockMiner {
+    fn is_terminated(&self) -> bool {
+        false
+    }
+}
+
+
+struct App {
+    mining_block: Arc<Mutex<Block>>,
+    active_blockchain: BlockChain,
+    network_manager: NetworkManager,
+    blockchain_topic: floodsub::Topic,
+    transactions_topic: floodsub::Topic,
+}
+
+async fn handle_blockchain(active_blockchain: Arc<Mutex<BlockChain>>, mining_block: Arc<Mutex<Block>>, data: Vec<u8>) {
+    println!("runnning once");
+}
+
+async fn handle_transaction(mining_block: Arc<Mutex<Block>>, data: Vec<u8>) {
+
+}
