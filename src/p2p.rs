@@ -1,4 +1,11 @@
-use libp2p::identity::Keypair;
+pub use libp2p::{
+    gossipsub::{self, Gossipsub, GossipsubConfig, GossipsubEvent, MessageAuthenticity},
+    identity,
+    identity::Keypair,
+    mdns::{Mdns, MdnsConfig, MdnsEvent},
+    swarm::SwarmEvent,
+    Multiaddr, NetworkBehaviour, PeerId, Swarm,
+};
 
 use super::*;
 
@@ -7,7 +14,7 @@ use super::*;
 #[derive(NetworkBehaviour)]
 #[behaviour(out_event = "OutEvent")]
 pub struct PeerBehaviour {
-    pub floodsub: Floodsub,
+    pub gossipsub: Gossipsub,
     pub mdns: Mdns,
 
     // Struct fields which do not implement NetworkBehaviour need to be ignored
@@ -19,7 +26,7 @@ pub struct PeerBehaviour {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum OutEvent {
-    Floodsub(FloodsubEvent),
+    Gossipsub(GossipsubEvent),
     Mdns(MdnsEvent),
 }
 
@@ -29,9 +36,9 @@ impl From<MdnsEvent> for OutEvent {
     }
 }
 
-impl From<FloodsubEvent> for OutEvent {
-    fn from(v: FloodsubEvent) -> Self {
-        Self::Floodsub(v)
+impl From<GossipsubEvent> for OutEvent {
+    fn from(v: GossipsubEvent) -> Self {
+        Self::Gossipsub(v)
     }
 }
 
@@ -41,8 +48,7 @@ pub struct NetworkManager {
 }
 
 impl NetworkManager {
-    pub async fn start(topics: Vec<floodsub::Topic>) -> Result<Self, Box<dyn Error>> {
-
+    pub async fn start(topics: Vec<gossipsub::IdentTopic>) -> Result<Self, Box<dyn Error>> {
         // Create a random PeerId
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
@@ -51,17 +57,20 @@ impl NetworkManager {
         // Set up an encrypted DNS-enabled TCP Transport over the Mplex and Yamux protocols
         let transport = libp2p::development_transport(local_key.clone()).await?;
 
+        let message_authenticity = MessageAuthenticity::Signed(local_key.clone());
+
         // Create a Swarm to manage peers and events
         let mut swarm = {
             let mdns = task::block_on(Mdns::new(MdnsConfig::default()))?;
+            let gossipsub_config = GossipsubConfig::default();
             let mut behaviour = PeerBehaviour {
-                floodsub: Floodsub::new(local_peer_id),
+                gossipsub: Gossipsub::new(message_authenticity, gossipsub_config)?,
                 mdns,
                 ignored_member: false,
             };
 
-            for floodsub_topic in &topics {
-                behaviour.floodsub.subscribe(floodsub_topic.clone());
+            for gossipsub_topic in &topics {
+                behaviour.gossipsub.subscribe(&gossipsub_topic.clone())?;
             }
             Swarm::new(transport, behaviour, local_peer_id)
         };
@@ -69,12 +78,6 @@ impl NetworkManager {
         // Listen on all interfaces and whatever port the OS assigns
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-        Ok(
-            Self {
-                swarm,
-                local_key,
-            }
-        )
-
+        Ok(Self { swarm, local_key })
     }
 }

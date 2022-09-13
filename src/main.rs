@@ -1,83 +1,79 @@
-
 mod p2p;
 
-
-use crypto_lib::{*, future::FusedFuture};
+use crypto_lib::{future::FusedFuture, *};
 use p2p::NetworkManager;
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mining_block = Arc::new(Mutex::new(Block {mined: false}));
-    let active_blockchain = Arc::new(Mutex::new(BlockChain::default()));
+    let new_blockchain = Blockchain::default();
 
-    let blockchain_topic = floodsub::Topic::new("blockchain");
-    let transactions_topic = floodsub::Topic::new("transactions");
+    let active_blockchain = Arc::new(Mutex::new(new_blockchain.clone()));
+    let mining_block = Arc::new(Mutex::new(new_blockchain.generate_block()));
 
-    let mut network_manager = NetworkManager::start(vec![blockchain_topic.clone(), transactions_topic.clone()]).await?;
+    let blockchain_topic = libp2p::gossipsub::IdentTopic::new("blockchain");
+    let transactions_topic = libp2p::gossipsub::IdentTopic::new("transactions");
 
-    let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
+    let mut network_manager =
+        NetworkManager::start(vec![blockchain_topic.clone(), transactions_topic.clone()]).await?;
 
-    let mut block_miner = BlockMiner::start(mining_block.clone());
+    let mut block_miner = BlockMiner::new(mining_block.clone());
+    block_miner.start();
 
-    // Kick it off
     loop {
         select! {
             _ = block_miner => {
-                println!("block mined");
-                let block = mining_block.lock().unwrap();
+                let mut block = mining_block.lock().unwrap();
+                println!("{:?} has been mined.", block);
                 let mut blockchain = active_blockchain.lock().unwrap();
-                blockchain.push(block.clone());
-                network_manager.swarm.behaviour_mut().floodsub
-                .publish(blockchain_topic.clone(), bincode::serialize(&(blockchain.clone())).unwrap())
+                println!("{:?}.", blockchain);
+                blockchain.blocks.push(block.clone());
+                network_manager.swarm.behaviour_mut().gossipsub
+                .publish(blockchain_topic.clone(), bincode::serialize(&(blockchain.clone())).unwrap());
+                *block = blockchain.generate_block();
             },
-            line = stdin.select_next_some() => network_manager.swarm
-                .behaviour_mut()
-                .floodsub
-                .publish(blockchain_topic.clone(), line.expect("Stdin not to close").as_bytes()),
             event = network_manager.swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
                     println!("Listening on {:?}", address);
                 }
-                SwarmEvent::Behaviour(p2p::OutEvent::Floodsub(
-                    FloodsubEvent::Message(message)
-                )) => {
-                    println!(
-                        "Received: '{:?}' from {:?}, on topic {:?}",
-                        String::from_utf8_lossy(&message.data),
-                        message.source,
-                        message.topics
-                    );
-                    let topic = &message.topics[0];
-                    let mining_block_copy = mining_block.clone();
-                    if topic == &blockchain_topic {
-                        let active_blockchain_copy = active_blockchain.clone();
-                        thread::spawn(move || handle_blockchain(active_blockchain_copy, mining_block_copy, message.data));
-                        println!("message on blockchain topic");
+                SwarmEvent::Behaviour(p2p::OutEvent::Gossipsub(
+                    libp2p::gossipsub::GossipsubEvent::Message{
+                        propagation_source: _,
+                        message_id: _,
+                        message
                     }
-                    else if topic == &transactions_topic {
-                        thread::spawn(move || handle_transaction(mining_block_copy, message.data));
-                        println!("message on transactions topic");
+                )) => {
+                    let topic = &message.topic;
+                    println!("Message on {:?}.", topic);
+                    let mining_block_copy = mining_block.clone();
+                    let active_blockchain_copy = active_blockchain.clone();
+                    if topic == &blockchain_topic.hash() {
+                        thread::spawn(move || handle_blockchain(active_blockchain_copy, mining_block_copy, &message.data));
+                    }
+                    else if topic == &transactions_topic.hash() {
+                        thread::spawn(move || handle_transaction(active_blockchain_copy, mining_block_copy, &message.data));
                     }
                 }
                 SwarmEvent::Behaviour(p2p::OutEvent::Mdns(
                     MdnsEvent::Discovered(list)
                 )) => {
+                    println!("NEW PEER DISCOVERED");
                     for (peer, _) in list {
                         network_manager.swarm
                             .behaviour_mut()
-                            .floodsub
-                            .add_node_to_partial_view(peer);
+                            .gossipsub
+                            .add_explicit_peer(&peer);
                     }
                 }
                 SwarmEvent::Behaviour(p2p::OutEvent::Mdns(MdnsEvent::Expired(
                     list
                 ))) => {
+                    println!("PEER EXPIRED");
                     for (peer, _) in list {
                         if !network_manager.swarm.behaviour_mut().mdns.has_node(&peer) {
                             network_manager.swarm
                                 .behaviour_mut()
-                                .floodsub
-                                .remove_node_from_partial_view(&peer);
+                                .gossipsub
+                                .remove_explicit_peer(&peer);
                         }
                     }
                 },
@@ -88,24 +84,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 struct BlockMiner {
-    block: Arc<Mutex<Block>>
+    block: Arc<Mutex<Block>>,
 }
 
 impl BlockMiner {
-    pub fn start(block: Arc<Mutex<Block>>) -> Self {
-        mining::mine_block_multithreaded(block.clone());
-        Self {
-            block
-        }
+    pub fn new(block: Arc<Mutex<Block>>) -> Self {
+        Self { block }
+    }
+    pub fn start(&self) {
+        let block_copy = self.block.clone();
+        thread::spawn(|| mining::mine_block(block_copy));
     }
 }
 
 impl Future for BlockMiner {
-    type Output=();
+    type Output = ();
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut task::Context<'_>,
+    ) -> task::Poll<Self::Output> {
         let block = self.block.lock().unwrap();
-        if block.mined { task::Poll::Ready(()) } else { task::Poll::Pending }
+        if block.mined() {
+            task::Poll::Ready(())
+        } else {
+            task::Poll::Pending
+        }
     }
 }
 
@@ -115,19 +119,56 @@ impl FusedFuture for BlockMiner {
     }
 }
 
-
-struct App {
+fn handle_blockchain(
+    active_blockchain: Arc<Mutex<Blockchain>>,
     mining_block: Arc<Mutex<Block>>,
-    active_blockchain: BlockChain,
-    network_manager: NetworkManager,
-    blockchain_topic: floodsub::Topic,
-    transactions_topic: floodsub::Topic,
+    data: &[u8],
+) {
+    let mut mining_block = mining_block.lock().unwrap();
+    let mut active_blockchain = active_blockchain.lock().unwrap();
+
+    println!("Processing new blockchain.");
+
+    match bincode::deserialize::<Blockchain>(data) {
+        Ok(candidate_blockchain) => {
+            if candidate_blockchain.blocks.len() > active_blockchain.blocks.len() {
+                if candidate_blockchain.valid() {
+                    *active_blockchain = candidate_blockchain;
+                    *mining_block = active_blockchain.generate_block();
+                    println!("{:?} accepted and replaced.", active_blockchain);
+                } else {
+                    println!("Blockchain discarded. Didn't pass validation tests.")
+                }
+            } else {
+                println!("Blockchain discarded. Shorter than our own.");
+            }
+        }
+        Err(_) => {
+            println!("Invalid blockchain format received.");
+        }
+    }
 }
 
-async fn handle_blockchain(active_blockchain: Arc<Mutex<BlockChain>>, mining_block: Arc<Mutex<Block>>, data: Vec<u8>) {
-    println!("runnning once");
-}
+fn handle_transaction(
+    active_blockchain: Arc<Mutex<Blockchain>>,
+    mining_block: Arc<Mutex<Block>>,
+    data: &[u8],
+) {
+    let active_blockchain = active_blockchain.lock().unwrap();
+    let mut mining_block = mining_block.lock().unwrap();
+    if mining_block.mined() {
+        return;
+    }
 
-async fn handle_transaction(mining_block: Arc<Mutex<Block>>, data: Vec<u8>) {
-
+    match bincode::deserialize::<Transaction>(data) {
+        Ok(transaction) => {
+            println!("Processing transaction {:?}", transaction);
+            if active_blockchain.verify_transaction(&transaction) {
+                mining_block.transactions.push(transaction);
+            }
+        }
+        Err(_) => {
+            println!("Received invalid transaction format");
+        }
+    };
 }

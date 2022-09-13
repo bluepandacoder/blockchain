@@ -130,10 +130,10 @@
   },
   "active": "e4645ff93e8300a5",
   "lastOpenFiles": [
+    "blockchain.md",
+    "main.md",
     "peer to peer network.md",
     "transaction.md",
-    "block.md",
-    "main.md",
-    "blockchain.md"
+    "block.md"
   ]
 }

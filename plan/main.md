@@ -10,5 +10,4 @@ steps:
 	1. establish communication with peers
 	2. start mining empty mutable block with coinbase [[transaction]]
 	3. listen for incoming [[blockchain]]
-	4. listen for finished mined [[block]]
-	5. listen for [[transaction]]s
+	4. listen for [[transaction]]s
