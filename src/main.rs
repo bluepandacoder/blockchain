@@ -3,12 +3,10 @@ mod p2p;
 use crypto_lib::{future::FusedFuture, *};
 use p2p::NetworkManager;
 
+use rand::rngs::OsRng;
+
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let new_blockchain = Blockchain::default();
-
-    let active_blockchain = Arc::new(Mutex::new(new_blockchain.clone()));
-    let mining_block = Arc::new(Mutex::new(new_blockchain.generate_block()));
 
     let blockchain_topic = libp2p::gossipsub::IdentTopic::new("blockchain");
     let transactions_topic = libp2p::gossipsub::IdentTopic::new("transactions");
@@ -16,20 +14,66 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut network_manager =
         NetworkManager::start(vec![blockchain_topic.clone(), transactions_topic.clone()]).await?;
 
+    let key_pair = Keypair::generate(&mut OsRng {});
+    let mut stdin = io::BufReader::new(io::stdin()).lines().fuse();
+
+    println!("PUBLIC KEY: {}", hex::encode(key_pair.public));
+
+    let new_blockchain = Blockchain::default();
+
+    let active_blockchain = Arc::new(Mutex::new(new_blockchain.clone()));
+    let mining_block = Arc::new(Mutex::new(new_blockchain.generate_block(key_pair.public)));
+
     let mut block_miner = BlockMiner::new(mining_block.clone());
     block_miner.start();
 
     loop {
+        let mining_block_copy = mining_block.clone();
+        let active_blockchain_copy = active_blockchain.clone();
         select! {
+            line = stdin.select_next_some() => {
+                match line {
+                    Ok(text) => {
+                        let mut sp = text.trim().split(' ');
+                        if let Some(to_user_hex) = sp.next() {
+                            match hex::decode(to_user_hex) {
+                                Ok(to_user) => {
+                                    if let Ok(to_user) = PublicKey::from_bytes(&to_user) {
+                                        if let Some(amount_str) = sp.next() {
+                                            match amount_str.parse::<u64>() {
+                                                Ok(amount) => {
+                                                    let new_transaction = bincode::serialize(&Transaction::new(to_user, amount, &key_pair))?;
+                                                    network_manager.swarm.behaviour_mut().gossipsub
+                                                    .publish(transactions_topic.clone(), new_transaction.clone());
+
+                                                    thread::spawn(move || handle_transaction(active_blockchain_copy, mining_block_copy, &new_transaction));
+                                                }
+                                                Err(e) => println!("{:?}", e)
+                                            }
+                                        }
+                                        else {
+                                            println!("No amount for transaction specified.");
+                                        }
+                                    }
+                                }
+                                Err(e) => println!("{:?}", e)
+                            }
+                        } 
+                    }
+                    Err(e) => println!("{:?}", e)
+                }
+            }
             _ = block_miner => {
                 let mut block = mining_block.lock().unwrap();
                 println!("{:?} has been mined.", block);
+
                 let mut blockchain = active_blockchain.lock().unwrap();
+                blockchain.add_block(block.clone()).unwrap();
                 println!("{:?}.", blockchain);
-                blockchain.blocks.push(block.clone());
+
                 network_manager.swarm.behaviour_mut().gossipsub
-                .publish(blockchain_topic.clone(), bincode::serialize(&(blockchain.clone())).unwrap());
-                *block = blockchain.generate_block();
+                .publish(blockchain_topic.clone(), bincode::serialize(&blockchain.blocks).unwrap());
+                *block = blockchain.generate_block(key_pair.public);
             },
             event = network_manager.swarm.select_next_some() => match event {
                 SwarmEvent::NewListenAddr { address, .. } => {
@@ -44,10 +88,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 )) => {
                     let topic = &message.topic;
                     println!("Message on {:?}.", topic);
-                    let mining_block_copy = mining_block.clone();
-                    let active_blockchain_copy = active_blockchain.clone();
                     if topic == &blockchain_topic.hash() {
-                        thread::spawn(move || handle_blockchain(active_blockchain_copy, mining_block_copy, &message.data));
+                        thread::spawn(move || handle_blockchain(active_blockchain_copy, mining_block_copy, &message.data, key_pair.public));
                     }
                     else if topic == &transactions_topic.hash() {
                         thread::spawn(move || handle_transaction(active_blockchain_copy, mining_block_copy, &message.data));
@@ -100,10 +142,7 @@ impl BlockMiner {
 impl Future for BlockMiner {
     type Output = ();
 
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut task::Context<'_>,
-    ) -> task::Poll<Self::Output> {
+    fn poll(self: std::pin::Pin<&mut Self>, _: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         let block = self.block.lock().unwrap();
         if block.mined() {
             task::Poll::Ready(())
@@ -123,21 +162,23 @@ fn handle_blockchain(
     active_blockchain: Arc<Mutex<Blockchain>>,
     mining_block: Arc<Mutex<Block>>,
     data: &[u8],
+    pub_key: PublicKey
 ) {
     let mut mining_block = mining_block.lock().unwrap();
     let mut active_blockchain = active_blockchain.lock().unwrap();
 
     println!("Processing new blockchain.");
 
-    match bincode::deserialize::<Blockchain>(data) {
-        Ok(candidate_blockchain) => {
-            if candidate_blockchain.blocks.len() > active_blockchain.blocks.len() {
-                if candidate_blockchain.valid() {
-                    *active_blockchain = candidate_blockchain;
-                    *mining_block = active_blockchain.generate_block();
-                    println!("{:?} accepted and replaced.", active_blockchain);
-                } else {
-                    println!("Blockchain discarded. Didn't pass validation tests.")
+    match bincode::deserialize::<Vec<Block>>(data) {
+        Ok(blocks) => {
+            if blocks.len() > active_blockchain.blocks.len() {
+                match Blockchain::construct(blocks) {
+                    Ok(new_blockchain) => {
+                        *active_blockchain = new_blockchain;
+                        *mining_block = active_blockchain.generate_block(pub_key);
+                        println!("{:?} accepted and replaced.", active_blockchain);
+                    }
+                    Err(e) => println!("Couldn't construct blockchain encountered: {:?}", e),
                 }
             } else {
                 println!("Blockchain discarded. Shorter than our own.");
@@ -162,9 +203,20 @@ fn handle_transaction(
 
     match bincode::deserialize::<Transaction>(data) {
         Ok(transaction) => {
-            println!("Processing transaction {:?}", transaction);
-            if active_blockchain.verify_transaction(&transaction) {
-                mining_block.transactions.push(transaction);
+            println!("Processing {:?}", transaction);
+            if transaction.valid() {
+                let user_spendings = &mining_block.spendings(&transaction.data.from);
+                let user_balance = active_blockchain.balances.get(transaction.data.from.as_bytes()).unwrap_or(&0);
+                if user_balance >= &(user_spendings+transaction.data.amount) {
+                    mining_block.transactions.push(transaction);
+                    println!("Transaction successfully added to mining block")
+                }
+                else {
+                    println!("Not enough coins to make transaction");
+                }
+            }
+            else {
+                println!("Transaction has invalid signature");
             }
         }
         Err(_) => {
