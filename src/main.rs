@@ -8,8 +8,8 @@ use rand::rngs::OsRng;
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
 
-    let blockchain_topic = libp2p::gossipsub::IdentTopic::new("blockchain");
-    let transactions_topic = libp2p::gossipsub::IdentTopic::new("transactions");
+    let blockchain_topic = gossipsub::IdentTopic::new("blockchain");
+    let transactions_topic = gossipsub::IdentTopic::new("transactions");
 
     let mut network_manager =
         NetworkManager::start(vec![blockchain_topic.clone(), transactions_topic.clone()]).await?;
@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let active_blockchain = Arc::new(Mutex::new(new_blockchain.clone()));
     let mining_block = Arc::new(Mutex::new(new_blockchain.generate_block(key_pair.public)));
 
-    let mut block_miner = BlockMiner::new(mining_block.clone());
+    let mut block_miner = BlockMiner::new(mining_block.clone(), active_blockchain.clone());
     block_miner.start();
 
     loop {
@@ -127,15 +127,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 struct BlockMiner {
     block: Arc<Mutex<Block>>,
+    blockchain: Arc<Mutex<Blockchain>>
 }
 
 impl BlockMiner {
-    pub fn new(block: Arc<Mutex<Block>>) -> Self {
-        Self { block }
+    pub fn new(block: Arc<Mutex<Block>>,blockchain: Arc<Mutex<Blockchain>>) -> Self {
+        Self { block, blockchain }
     }
     pub fn start(&self) {
         let block_copy = self.block.clone();
-        thread::spawn(|| mining::mine_block(block_copy));
+        let blockchain_copy = self.blockchain.clone();
+        thread::spawn(|| mining::mine_block(block_copy, blockchain_copy));
     }
 }
 
@@ -144,7 +146,11 @@ impl Future for BlockMiner {
 
     fn poll(self: std::pin::Pin<&mut Self>, _: &mut task::Context<'_>) -> task::Poll<Self::Output> {
         let block = self.block.lock().unwrap();
-        if block.mined() {
+        let blockchain = self.blockchain.lock().unwrap();
+
+        let difficulty = blockchain.difficulty(&block);
+
+        if mining::mined(&block, difficulty) {
             task::Poll::Ready(())
         } else {
             task::Poll::Pending
@@ -171,17 +177,18 @@ fn handle_blockchain(
 
     match bincode::deserialize::<Vec<Block>>(data) {
         Ok(blocks) => {
-            if blocks.len() > active_blockchain.blocks.len() {
-                match Blockchain::construct(blocks) {
-                    Ok(new_blockchain) => {
+            match Blockchain::construct(blocks) {
+                Ok(new_blockchain) => {
+                    if new_blockchain.weight > active_blockchain.weight {
                         *active_blockchain = new_blockchain;
                         *mining_block = active_blockchain.generate_block(pub_key);
                         println!("{:?} accepted and replaced.", active_blockchain);
                     }
-                    Err(e) => println!("Couldn't construct blockchain encountered: {:?}", e),
+                    else {
+                        println!("Discarded blockchain, lighter than our own.");
+                    }
                 }
-            } else {
-                println!("Blockchain discarded. Shorter than our own.");
+                Err(e) => println!("Couldn't construct blockchain encountered: {:?}", e),
             }
         }
         Err(_) => {
@@ -197,7 +204,8 @@ fn handle_transaction(
 ) {
     let active_blockchain = active_blockchain.lock().unwrap();
     let mut mining_block = mining_block.lock().unwrap();
-    if mining_block.mined() {
+    let difficulty = active_blockchain.difficulty(&mining_block);
+    if mining::mined(&mining_block, difficulty) {
         return;
     }
 

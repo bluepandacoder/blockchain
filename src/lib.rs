@@ -3,11 +3,14 @@ pub const MINING_REQ: U256 = U256 {
     0: [2 << 20, 0, 0, 0],
 };
 pub const MINING_REW: u64 = 100;
+pub const TIME_BASE: u64 = 10;
 
 pub mod blockchain;
 pub mod mining;
 pub mod p2p;
 pub mod transaction;
+
+use std::time::{ SystemTime, UNIX_EPOCH };
 
 pub use async_std::{io, task};
 pub use blockchain::Block;
@@ -24,7 +27,6 @@ pub use libp2p::{
     swarm::SwarmEvent,
     Multiaddr, NetworkBehaviour, PeerId, Swarm,
 };
-use serde::ser::SerializeStruct;
 pub use serde::{Deserialize, Serialize};
 pub use std::error::Error;
 pub use std::sync::{Arc, Mutex};
@@ -35,4 +37,13 @@ pub use ed25519_dalek::{Signature, Signer, Verifier, PublicKey, Keypair};
 
 trait Hashable {
     fn hash(&self) -> Hash;
+}
+
+
+pub fn now() -> u64 {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap();
+
+    duration.as_secs()
 }
