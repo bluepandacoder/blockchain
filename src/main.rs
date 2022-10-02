@@ -137,7 +137,7 @@ impl BlockMiner {
     pub fn start(&self) {
         let block_copy = self.block.clone();
         let blockchain_copy = self.blockchain.clone();
-        thread::spawn(|| mining::mine_block(block_copy, blockchain_copy));
+        thread::spawn(|| mining::mine_block_multithreaded(block_copy, blockchain_copy));
     }
 }
 
