@@ -1,5 +1,45 @@
 use super::*;
-use std::thread;
+use std::{thread, time::Duration};
+use crate::future::FusedFuture;
+
+pub struct BlockMiner {
+    block: Arc<Mutex<Block>>,
+    blockchain: Arc<Mutex<Blockchain>>,
+}
+
+impl BlockMiner {
+    pub fn new(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<Blockchain>>) -> Self {
+        Self { block, blockchain }
+    }
+    pub fn start(&self) {
+        let block_copy = self.block.clone();
+        let blockchain_copy = self.blockchain.clone();
+        thread::spawn(|| mine_block(block_copy, blockchain_copy));
+    }
+}
+
+impl Future for BlockMiner {
+    type Output = ();
+
+    fn poll(self: std::pin::Pin<&mut Self>, _: &mut task::Context<'_>) -> task::Poll<Self::Output> {
+        let block = self.block.lock().unwrap();
+        let blockchain = self.blockchain.lock().unwrap();
+
+        let difficulty = blockchain.difficulty(&block);
+
+        if mined(&block, difficulty) {
+            task::Poll::Ready(())
+        } else {
+            task::Poll::Pending
+        }
+    }
+}
+
+impl FusedFuture for BlockMiner {
+    fn is_terminated(&self) -> bool {
+        false
+    }
+}
 
 pub fn mine_block_multithreaded(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<Blockchain>>) {
     let block_id = Arc::new(Mutex::new(0usize));
@@ -15,15 +55,13 @@ pub fn mine_block_multithreaded(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<
                 let block_id = block_id_copy;
 
                 loop {
-
                     let mining_block_id = block_id.lock().unwrap().clone();
                     let mut mining_block = (block.lock().unwrap()).clone();
                     let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
 
                     if mined(&mining_block, difficulty) {
                         thread::sleep(std::time::Duration::from_millis(100))
-                    }
-                    else {
+                    } else {
                         mining_block.nonce = rand::random::<u64>() / 2;
                         mining_block.timestamp = now();
                         let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
@@ -46,25 +84,26 @@ pub fn mine_block_multithreaded(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<
     });
 }
 
-
 pub fn mine_block(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<Blockchain>>) {
     loop {
         let mut mining_block = (block.lock().unwrap()).clone();
         let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
         if mined(&mining_block, difficulty) {
             thread::sleep(std::time::Duration::from_millis(100));
-        }
-        else {
+        } else {
             mining_block.nonce = rand::random::<u64>() / 2;
             mining_block.timestamp = now();
             let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
 
-            for _ in 0..100_000 {
+            for _ in 0..100 {
                 if mined(&mining_block, difficulty) {
                     *block.lock().unwrap() = mining_block;
                     break;
                 }
                 mining_block.nonce += 1;
+
+                // to decrease cpu consumption
+                thread::sleep(Duration::from_millis(10));
             }
         }
     }
@@ -86,5 +125,5 @@ pub fn calculate_dif_offset(time_dif: u64) -> i32 {
 }
 
 pub fn mined(block: &Block, difficulty: u32) -> bool {
-    block.hash()%(2<< difficulty) == 0.into()
+    block.hash() % (2 << difficulty) == 0.into()
 }

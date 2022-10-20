@@ -45,6 +45,7 @@ impl From<GossipsubEvent> for OutEvent {
 pub struct NetworkManager {
     pub swarm: Swarm<PeerBehaviour>,
     pub local_key: Keypair,
+    pub topics: Vec<gossipsub::IdentTopic>
 }
 
 impl NetworkManager {
@@ -78,6 +79,6 @@ impl NetworkManager {
         // Listen on all interfaces and whatever port the OS assigns
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
-        Ok(Self { swarm, local_key })
+        Ok(Self { swarm, local_key, topics })
     }
 }
