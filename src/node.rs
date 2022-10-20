@@ -17,9 +17,10 @@ impl Node {
             NetworkManager::start(vec![blockchain_topic.clone(), transaction_topic.clone()])
                 .await?;
 
-
         let active_blockchain = Arc::new(Mutex::new(Blockchain::default()));
-        let active_block = Arc::new(Mutex::new(active_blockchain.lock().unwrap().generate_block(key_pair.public)));
+        let active_block = Arc::new(Mutex::new(
+            active_blockchain.lock().unwrap().generate_block(rew_pkey),
+        ));
 
         let mut block_miner =
             mining::BlockMiner::new(active_block.clone(), active_blockchain.clone());
@@ -30,7 +31,7 @@ impl Node {
 
         let mining_handle = thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
-             rt.block_on(async {
+            rt.block_on(async {
                 let active_block = active_block_copy;
                 let active_blockchain = active_blockchain_copy;
                 loop {
@@ -41,7 +42,7 @@ impl Node {
                             let mut block = active_block.lock().unwrap();
                             let mut blockchain = active_blockchain.lock().unwrap();
                             blockchain.add_block(block.clone()).unwrap();
-                            println!("{:?}.", blockchain);
+                            //println!("{:?}.", blockchain);
 
                             network_manager.swarm.behaviour_mut().gossipsub
                             .publish(blockchain_topic.clone(), bincode::serialize(&blockchain.blocks).unwrap());
@@ -49,7 +50,7 @@ impl Node {
                         },
                         event = network_manager.swarm.select_next_some() => match event {
                             SwarmEvent::NewListenAddr { address, .. } => {
-                                println!("Listening on {:?}", address);
+                                //println!("Listening on {:?}", address);
                             }
                             SwarmEvent::Behaviour(p2p::OutEvent::Gossipsub(
                                 libp2p::gossipsub::GossipsubEvent::Message{
@@ -59,7 +60,7 @@ impl Node {
                                 }
                             )) => {
                                 let topic = &message.topic;
-                                println!("Message on {:?}.", topic);
+                                //println!("Message on {:?}.", topic);
                                 if topic == &blockchain_topic.hash() {
                                     let rew_pkey = rew_pkey.clone();
                                     thread::spawn(move || handle_blockchain(active_blockchain_copy, active_block_copy, &message.data, rew_pkey));
@@ -71,7 +72,7 @@ impl Node {
                             SwarmEvent::Behaviour(p2p::OutEvent::Mdns(
                                 MdnsEvent::Discovered(list)
                             )) => {
-                                println!("NEW PEER DISCOVERED");
+                                //println!("NEW PEER DISCOVERED");
                                 for (peer, _) in list {
                                     network_manager.swarm
                                         .behaviour_mut()
@@ -82,7 +83,7 @@ impl Node {
                             SwarmEvent::Behaviour(p2p::OutEvent::Mdns(MdnsEvent::Expired(
                                 list
                             ))) => {
-                                println!("PEER EXPIRED");
+                                //println!("PEER EXPIRED");
                                 for (peer, _) in list {
                                     if !network_manager.swarm.behaviour_mut().mdns.has_node(&peer) {
                                         network_manager.swarm
@@ -116,7 +117,7 @@ fn handle_blockchain(
     let mut mining_block = mining_block.lock().unwrap();
     let mut active_blockchain = active_blockchain.lock().unwrap();
 
-    println!("Processing new blockchain.");
+    //println!("Processing new blockchain.");
 
     match bincode::deserialize::<Vec<Block>>(data) {
         Ok(blocks) => match Blockchain::construct(blocks) {
@@ -124,15 +125,15 @@ fn handle_blockchain(
                 if new_blockchain.weight > active_blockchain.weight {
                     *active_blockchain = new_blockchain;
                     *mining_block = active_blockchain.generate_block(pub_key);
-                    println!("{:?} accepted and replaced.", active_blockchain);
+                    //println!("{:?} accepted and replaced.", active_blockchain);
                 } else {
-                    println!("Discarded blockchain, lighter than our own.");
+                    //println!("Discarded blockchain, lighter than our own.");
                 }
             }
-            Err(e) => println!("Couldn't construct blockchain encountered: {:?}", e),
+            Err(e) => {} //println!("Couldn't construct blockchain encountered: {:?}", e),
         },
         Err(_) => {
-            println!("Invalid blockchain format received.");
+            //println!("Invalid blockchain format received.");
         }
     }
 }
@@ -151,7 +152,7 @@ fn handle_transaction(
 
     match bincode::deserialize::<Transaction>(data) {
         Ok(transaction) => {
-            println!("Processing {:?}", transaction);
+            //println!("Processing {:?}", transaction);
             if transaction.valid() {
                 let user_spendings = &mining_block.spendings(&transaction.data.from);
                 let user_balance = active_blockchain
@@ -160,16 +161,16 @@ fn handle_transaction(
                     .unwrap_or(&0);
                 if user_balance >= &(user_spendings + transaction.data.amount) {
                     mining_block.transactions.push(transaction);
-                    println!("Transaction successfully added to mining block")
+                    //println!("Transaction successfully added to mining block")
                 } else {
-                    println!("Not enough coins to make transaction");
+                    //println!("Not enough coins to make transaction");
                 }
             } else {
-                println!("Transaction has invalid signature");
+                //println!("Transaction has invalid signature");
             }
         }
         Err(_) => {
-            println!("Received invalid transaction format");
+            //println!("Received invalid transaction format");
         }
     };
 }

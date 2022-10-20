@@ -6,13 +6,15 @@ pub const MINING_REW: u64 = 100;
 pub const TIME_BASE: u64 = 10;
 
 pub mod blockchain;
+pub mod client;
 pub mod mining;
+pub mod node;
 pub mod p2p;
 pub mod transaction;
-pub mod node;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use client::Client;
 pub use node::Node;
 
 pub use p2p::NetworkManager;

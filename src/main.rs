@@ -1,26 +1,43 @@
-use std::hash::Hash;
 use crypto_lib::{future::FusedFuture, *};
+use std::hash::Hash;
 
-use rand::rngs::OsRng;
+use dialoguer::console::Term;
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::Select;
+
+const OPTIONS: [&str; 4] = ["Current block", "Balance", "Blockchain", "Exit"];
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-
     let blockchain_topic = gossipsub::IdentTopic::new("blockchain");
     let transactions_topic = gossipsub::IdentTopic::new("transactions");
 
+    let mut client = Client::new(blockchain_topic.clone(), transactions_topic.clone()).await?;
 
-    let key_pair = Keypair::generate(&mut OsRng {});
+    let mut node =
+        Node::start(blockchain_topic, transactions_topic, client.key_pair.public).await?;
 
-    let mut node = Node::start(blockchain_topic, transactions_topic,
-                               key_pair.public).await?;
+    println!("PUBLIC KEY: {}", hex::encode(client.key_pair.public));
 
-    println!("PUBLIC KEY: {}", hex::encode(key_pair.public));
-
-    node.mining_handle.join();
-
-    Ok(())
+    loop {
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select action:")
+            .default(0)
+            .items(&OPTIONS)
+            .interact_on(&Term::stdout())
+            .unwrap();
+        match selection {
+            0 => println!("{:?}", node.active_block.lock().unwrap()),
+            1 => println!(
+                "{:?}",
+                node.active_blockchain
+                    .lock()
+                    .unwrap()
+                    .balances
+                    .get(&client.key_pair.public.as_bytes().hash())
+                    .unwrap_or(0)
+            ),
+            _ => println!("You need to select an action!"),
+        }
+    }
 }
-
-
-
