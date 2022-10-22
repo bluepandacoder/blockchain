@@ -5,14 +5,20 @@ use dialoguer::console::Term;
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::Select;
 
-const OPTIONS: [&str; 4] = ["Current block", "Balance", "Blockchain", "Exit"];
+const OPTIONS: [&str; 5] = [
+    "Current block",
+    "Balance",
+    "Blockchain",
+    "Make transaction",
+    "Exit",
+];
 
 #[async_std::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let blockchain_topic = gossipsub::IdentTopic::new("blockchain");
     let transactions_topic = gossipsub::IdentTopic::new("transactions");
 
-    let mut client = Client::new(blockchain_topic.clone(), transactions_topic.clone()).await?;
+    let mut client = Client::start(blockchain_topic.clone(), transactions_topic.clone()).await?;
 
     let mut node =
         Node::start(blockchain_topic, transactions_topic, client.key_pair.public).await?;
@@ -34,10 +40,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .lock()
                     .unwrap()
                     .balances
-                    .get(&client.key_pair.public.as_bytes().hash())
-                    .unwrap_or(0)
+                    .get(client.key_pair.public.as_bytes())
+                    .unwrap_or(&0)
             ),
+            2 => println!("{:?}", node.active_blockchain.lock().unwrap()),
+            3 => break,
             _ => println!("You need to select an action!"),
         }
     }
+
+    Ok(())
 }
