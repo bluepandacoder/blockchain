@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let blockchain_topic = gossipsub::IdentTopic::new("blockchain");
     let transactions_topic = gossipsub::IdentTopic::new("transactions");
 
-    let mut client = Client::start(blockchain_topic.clone(), transactions_topic.clone()).await?;
+    let mut client = Client::start(transactions_topic.clone()).await?;
 
     let mut node =
         Node::start(blockchain_topic, transactions_topic, client.key_pair.public).await?;
@@ -44,7 +44,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .unwrap_or(&0)
             ),
             2 => println!("{:?}", node.active_blockchain.lock().unwrap()),
-            3 => break,
+            3 => {
+                let payee_address =
+                    dialoguer::Input::<String>::with_theme(&ColorfulTheme::default())
+                        .with_prompt("Payee address")
+                        .interact_on(&Term::stdout())
+                        .unwrap();
+                let amount = dialoguer::Input::<u64>::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Amount")
+                    .interact_on(&Term::stdout())
+                    .unwrap();
+
+                let payee_address = hex::FromHex::from_hex(payee_address).unwrap();
+
+                client.send_transaction(payee_address, amount);
+            }
+
+            4 => break,
             _ => println!("You need to select an action!"),
         }
     }
