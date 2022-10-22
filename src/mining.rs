@@ -1,6 +1,6 @@
 use super::*;
-use std::{thread, time::Duration};
 use crate::future::FusedFuture;
+use std::{thread, time::Duration};
 
 pub struct BlockMiner {
     block: Arc<Mutex<Block>>,
@@ -14,7 +14,7 @@ impl BlockMiner {
     pub fn start(&self) {
         let block_copy = self.block.clone();
         let blockchain_copy = self.blockchain.clone();
-        thread::spawn(|| mine_block(block_copy, blockchain_copy));
+        thread::spawn(|| mine_block_multithreaded(block_copy, blockchain_copy));
     }
 }
 
@@ -88,8 +88,9 @@ pub fn mine_block(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<Blockchain>>) 
     loop {
         let mut mining_block = (block.lock().unwrap()).clone();
         let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
-        if mined(&mining_block, difficulty) {
-            thread::sleep(std::time::Duration::from_millis(100));
+        if mined(&mining_block, difficulty) || mining_block.transactions.is_empty() {
+            thread::sleep(std::time::Duration::from_millis(10000));
+            println!("Block has 0 transactions (not mining)")
         } else {
             mining_block.nonce = rand::random::<u64>() / 2;
             mining_block.timestamp = now();

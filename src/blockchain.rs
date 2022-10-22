@@ -59,8 +59,9 @@ impl core::fmt::Debug for Blockchain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Blockchain with {} blocks, {:?} balances, active difficulty {} and weight of {}",
+            "Blockchain with {} blocks, {} transactions, {:?} balances, active difficulty {} and weight of {}",
             self.blocks.len(),
+            self.blocks.iter().map(|x| x.transactions.len()).sum::<usize>(),
             self.balances.values(),
             self.cur_dif,
             self.weight

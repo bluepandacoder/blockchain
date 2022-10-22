@@ -55,9 +55,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     .interact_on(&Term::stdout())
                     .unwrap();
 
-                let payee_address = hex::FromHex::from_hex(payee_address).unwrap();
+                let payee_address = hex::decode(payee_address).unwrap();
 
-                client.send_transaction(payee_address, amount);
+                client.send_transaction(PublicKey::from_bytes(&payee_address).unwrap(), amount);
             }
 
             4 => break,
