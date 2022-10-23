@@ -68,11 +68,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("{:?} has been mined.", block);
 
                 let mut blockchain = active_blockchain.lock().unwrap();
-                blockchain.add_block(block.clone()).unwrap();
-                println!("{:?}.", blockchain);
+                match blockchain.add_block(block.clone()) {
+                    Ok(()) => {
+                        println!("Sending to peers {:?}", blockchain);
 
-                network_manager.swarm.behaviour_mut().gossipsub
-                .publish(blockchain_topic.clone(), bincode::serialize(&blockchain.blocks).unwrap());
+                        network_manager.swarm.behaviour_mut().gossipsub
+                        .publish(blockchain_topic.clone(), bincode::serialize(&blockchain.blocks).unwrap());
+                    }
+                    Err(e) => {
+                        println!("Error when adding mined block: {:?}", e);
+                    }
+                }
+
                 *block = blockchain.generate_block(key_pair.public);
             },
             event = network_manager.swarm.select_next_some() => match event {

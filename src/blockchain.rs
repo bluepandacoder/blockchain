@@ -110,6 +110,8 @@ impl Blockchain {
 
         // check transactions
         for transaction in &block.transactions {
+            println!("Transaction inside a block detected {:?}", transaction);
+
             let pub_kb = transaction.data.from.as_bytes();
 
             if !transaction.valid() {
@@ -118,18 +120,17 @@ impl Blockchain {
             if &transaction.data.amount > self.balances.get(pub_kb).unwrap_or(&0) {
                 return Err(BlockValidationError::ExcessiveTransactionAmount);
             }
-            match self.balances.get_mut(pub_kb) {
-                Some(balance) => {
-                    *balance -= transaction.data.amount;
-                }
-                None => {
-                    return Err(BlockValidationError::ExcessiveTransactionAmount);
-                }
+            if let Some(balance) = self.balances.get_mut(pub_kb) {
+                *balance -= transaction.data.amount;
+                println!("New transaction balance: {}", balance);
+            }
+            else {
+                return Err(BlockValidationError::ExcessiveTransactionAmount);
             }
         }
 
         for transaction in &block.transactions {
-            if let Some(balance) = self.balances.get_mut(transaction.data.from.as_bytes()) {
+            if let Some(balance) = self.balances.get_mut(transaction.data.to.as_bytes()) {
                 *balance += transaction.data.amount;
             }
             else {

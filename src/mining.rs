@@ -17,8 +17,11 @@ pub fn mine_block_multithreaded(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<
                 loop {
 
                     let mining_block_id = block_id.lock().unwrap().clone();
-                    let mut mining_block = (block.lock().unwrap()).clone();
-                    let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
+                    let active_block = block.lock().unwrap();
+                    let difficulty = (blockchain.lock().unwrap()).difficulty(&active_block);
+
+                    let mut mining_block = active_block.clone();
+                    drop(active_block);
 
                     if mined(&mining_block, difficulty) {
                         thread::sleep(std::time::Duration::from_millis(100))
@@ -28,7 +31,7 @@ pub fn mine_block_multithreaded(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<
                         mining_block.timestamp = now();
                         let difficulty = (blockchain.lock().unwrap()).difficulty(&mining_block);
 
-                        for _ in 0..100_000 {
+                        for _ in 0..100 {
                             if mined(&mining_block, difficulty) {
                                 let mut block_id = block_id.lock().unwrap();
                                 if mining_block_id == *block_id {
@@ -38,6 +41,7 @@ pub fn mine_block_multithreaded(block: Arc<Mutex<Block>>, blockchain: Arc<Mutex<
                                 break;
                             }
                             mining_block.nonce += 1;
+                            thread::sleep_ms(1);
                         }
                     }
                 }
