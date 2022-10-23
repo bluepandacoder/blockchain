@@ -41,7 +41,7 @@ impl Block {
 #[derive(Debug)]
 pub enum BlockValidationError {
     PrevHashMismatch,
-    BlockNotMinedCorrectly,
+    NotMinedCorrectly,
     ExcessiveTransactionAmount,
     InvalidTransactionSignature,
     InvalidTimestamp,
@@ -114,7 +114,7 @@ impl Blockchain {
         let new_difficulty = self.difficulty(&block);
 
         if !mining::mined(&block, new_difficulty) {
-            return Err(BlockValidationError::BlockNotMinedCorrectly);
+            return Err(BlockValidationError::NotMinedCorrectly);
         }
 
         // check transactions
@@ -127,18 +127,15 @@ impl Blockchain {
             if &transaction.data.amount > self.balances.get(pub_kb).unwrap_or(&0) {
                 return Err(BlockValidationError::ExcessiveTransactionAmount);
             }
-            match self.balances.get_mut(pub_kb) {
-                Some(balance) => {
-                    *balance -= transaction.data.amount;
-                }
-                None => {
-                    return Err(BlockValidationError::ExcessiveTransactionAmount);
-                }
+            if let Some(balance) = self.balances.get_mut(pub_kb) {
+                *balance -= transaction.data.amount;
+            } else {
+                return Err(BlockValidationError::ExcessiveTransactionAmount);
             }
         }
 
         for transaction in &block.transactions {
-            if let Some(balance) = self.balances.get_mut(transaction.data.from.as_bytes()) {
+            if let Some(balance) = self.balances.get_mut(transaction.data.to.as_bytes()) {
                 *balance += transaction.data.amount;
             } else {
                 self.balances

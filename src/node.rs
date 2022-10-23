@@ -41,16 +41,20 @@ impl Node {
                         _ = block_miner => {
                             let mut block = active_block.lock().unwrap();
                             let mut blockchain = active_blockchain.lock().unwrap();
-                            blockchain.add_block(block.clone()).unwrap();
-                            println!("{:?}.", blockchain);
+                            match blockchain.add_block(block.clone()) {
+                                Ok(()) => {
+//                                    println!("Sending to peers: {:?}.", blockchain);
 
-                            network_manager.swarm.behaviour_mut().gossipsub
-                            .publish(blockchain_topic.clone(), bincode::serialize(&blockchain.blocks).unwrap());
+                                    network_manager.swarm.behaviour_mut().gossipsub
+                                    .publish(blockchain_topic.clone(), bincode::serialize(&blockchain.blocks).unwrap());
+                                }
+                                Err(e) => println!("Error encountered when adding mined block: {:?}", e)
+                            }
                             *block = blockchain.generate_block(rew_pkey);
                         },
                         event = network_manager.swarm.select_next_some() => match event {
                             SwarmEvent::NewListenAddr { address, .. } => {
-                                println!("Listening on {:?}", address);
+                                //println!("Listening on {:?}", address);
                             }
                             SwarmEvent::Behaviour(p2p::OutEvent::Gossipsub(
                                 libp2p::gossipsub::GossipsubEvent::Message{
@@ -60,7 +64,7 @@ impl Node {
                                 }
                             )) => {
                                 let topic = &message.topic;
-                                println!("Message on {:?}.", topic);
+                                //println!("Message on {:?}.", topic);
                                 if topic == &blockchain_topic.hash() {
                                     let rew_pkey = rew_pkey.clone();
                                     thread::spawn(move || handle_blockchain(active_blockchain_copy, active_block_copy, &message.data, rew_pkey));
@@ -72,7 +76,7 @@ impl Node {
                             SwarmEvent::Behaviour(p2p::OutEvent::Mdns(
                                 MdnsEvent::Discovered(list)
                             )) => {
-                                println!("NEW PEER DISCOVERED");
+                                //println!("NEW PEER DISCOVERED");
                                 for (peer, _) in list {
                                     network_manager.swarm
                                         .behaviour_mut()
@@ -83,7 +87,7 @@ impl Node {
                             SwarmEvent::Behaviour(p2p::OutEvent::Mdns(MdnsEvent::Expired(
                                 list
                             ))) => {
-                                println!("PEER EXPIRED");
+                                //println!("PEER EXPIRED");
                                 for (peer, _) in list {
                                     if !network_manager.swarm.behaviour_mut().mdns.has_node(&peer) {
                                         network_manager.swarm
@@ -117,7 +121,7 @@ fn handle_blockchain(
     let mut mining_block = mining_block.lock().unwrap();
     let mut active_blockchain = active_blockchain.lock().unwrap();
 
-    println!("Processing new blockchain.");
+    //println!("Processing new blockchain.");
 
     if let Ok(blocks) = bincode::deserialize::<Vec<Block>>(data) {
         match Blockchain::construct(blocks) {
@@ -125,13 +129,13 @@ fn handle_blockchain(
                 if new_blockchain.weight > active_blockchain.weight {
                     *active_blockchain = new_blockchain;
                     *mining_block = active_blockchain.generate_block(pub_key);
-                    println!("{:?} accepted and replaced.", active_blockchain);
+                    //println!("{:?} accepted and replaced.", active_blockchain);
                 } else {
-                    println!("Discarded blockchain, lighter than our own.");
+                    //println!("Discarded blockchain, lighter than our own.");
                 }
             }
             Err(e) => {
-                println!("Couldn't construct blockchain encountered: {:?}", e)
+                //println!("Couldn't construct blockchain encountered: {:?}", e)
             }
         }
     }
@@ -150,7 +154,7 @@ fn handle_transaction(
     }
 
     if let Ok(transaction) = bincode::deserialize::<Transaction>(data) {
-        println!("Processing {:?}", transaction);
+        //println!("Processing {:?}", transaction);
         if transaction.valid() {
             let user_spendings = &mining_block.spendings(&transaction.data.from);
             let user_balance = active_blockchain
@@ -159,11 +163,11 @@ fn handle_transaction(
                 .unwrap_or(&0);
             if user_balance >= &(user_spendings + transaction.data.amount) {
                 mining_block.transactions.push(transaction);
-                println!("Transaction successfully added to mining block");
-                println!(
-                    "Block now has {:?} transactions",
-                    mining_block.transactions.len()
-                );
+                //println!("Transaction successfully added to mining block");
+                //println!(
+                //    "Block now has {:?} transactions",
+                //    mining_block.transactions.len()
+                //);
             } else {
                 println!("Not enough coins to make transaction");
             }

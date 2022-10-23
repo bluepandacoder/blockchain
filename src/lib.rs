@@ -3,7 +3,7 @@ pub const MINING_REQ: U256 = U256 {
     0: [2 << 20, 0, 0, 0],
 };
 pub const MINING_REW: u64 = 100;
-pub const TIME_BASE: u64 = 10;
+pub const TIME_BASE: u64 = 30;
 
 pub mod blockchain;
 pub mod client;
