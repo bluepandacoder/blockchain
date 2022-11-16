@@ -119,6 +119,8 @@ impl Blockchain {
 
         // check transactions
         for transaction in &block.transactions {
+            println!("Transaction inside a block detected {:?}", transaction);
+
             let pub_kb = transaction.data.from.as_bytes();
 
             if !transaction.valid() {
