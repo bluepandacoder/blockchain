@@ -4,7 +4,6 @@ use std::collections::VecDeque;
 
 pub struct Client {
     pub key_pair: Keypair,
-    background_handle: std::thread::JoinHandle<()>,
     transactions: Arc<Mutex<VecDeque<Transaction>>>,
 }
 
@@ -15,7 +14,7 @@ impl Client {
         let transactions: Arc<Mutex<VecDeque<Transaction>>> = Default::default();
         let transactions_copy = transactions.clone();
 
-        let background_handle = thread::spawn(move || {
+        rayon::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let mut transaction_stream = TransactionStream {
@@ -63,7 +62,6 @@ impl Client {
 
         Ok(Self {
             key_pair: Keypair::generate(&mut OsRng {}),
-            background_handle,
             transactions,
         })
     }

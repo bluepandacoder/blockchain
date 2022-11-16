@@ -4,7 +4,6 @@ use std::thread::{JoinHandle, Thread};
 pub struct Node {
     pub active_blockchain: Arc<Mutex<Blockchain>>,
     pub active_block: Arc<Mutex<Block>>,
-    pub mining_handle: JoinHandle<()>,
 }
 
 impl Node {
@@ -29,7 +28,7 @@ impl Node {
         let active_block_copy = active_block.clone();
         let active_blockchain_copy = active_blockchain.clone();
 
-        let mining_handle = thread::spawn(move || {
+        rayon::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 let active_block = active_block_copy;
@@ -107,7 +106,6 @@ impl Node {
         Ok(Self {
             active_blockchain,
             active_block,
-            mining_handle,
         })
     }
 }

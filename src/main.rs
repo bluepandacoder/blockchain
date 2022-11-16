@@ -20,8 +20,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut client = Client::start(transactions_topic.clone()).await?;
 
-    let mut node =
-        Node::start(blockchain_topic, transactions_topic, client.key_pair.public).await?;
+    let node = Node::start(blockchain_topic, transactions_topic, client.key_pair.public).await?;
 
     println!("PUBLIC KEY: {}", hex::encode(client.key_pair.public));
 
@@ -50,14 +49,30 @@ async fn main() -> Result<(), Box<dyn Error>> {
                         .with_prompt("Payee address")
                         .interact_on(&Term::stdout())
                         .unwrap();
+
                 let amount = dialoguer::Input::<u64>::with_theme(&ColorfulTheme::default())
                     .with_prompt("Amount")
                     .interact_on(&Term::stdout())
                     .unwrap();
 
-                let payee_address = hex::decode(payee_address).unwrap();
+                let balance = *node
+                    .active_blockchain
+                    .lock()
+                    .unwrap()
+                    .balances
+                    .get(client.key_pair.public.as_bytes())
+                    .unwrap_or(&0);
 
-                client.send_transaction(PublicKey::from_bytes(&payee_address).unwrap(), amount);
+                if balance < amount {
+                    println!("You don't have that many coins!");
+                    continue;
+                }
+
+                if let Ok(payee_address) = hex::decode(payee_address) {
+                    client.send_transaction(PublicKey::from_bytes(&payee_address).unwrap(), amount);
+                } else {
+                    println!("Wrong payee address format!");
+                }
             }
 
             4 => break,
