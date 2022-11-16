@@ -1,8 +1,8 @@
 use super::*;
+use crate::mining::calculate_dif_offset;
 use crypto_hash::{digest, Algorithm};
 use ed25519_dalek::PUBLIC_KEY_LENGTH;
 use std::collections::HashMap;
-use crate::mining::{calculate_dif_offset};
 
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Block {
@@ -15,7 +15,9 @@ pub struct Block {
 
 impl core::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Block with {} transactions, mined by {}", 
+        write!(
+            f,
+            "Block with {} transactions, mined by {}",
             self.transactions.len(),
             hex::encode(self.mined_by)
         )
@@ -28,19 +30,21 @@ impl Block {
         digest(Algorithm::SHA256, &block_binary)[0..32].into()
     }
     pub fn spendings(&self, user: &PublicKey) -> u64 {
-        self.transactions.iter().
-            filter(|t| &t.data.from==user).
-            map(|t| t.data.amount).sum()
+        self.transactions
+            .iter()
+            .filter(|t| &t.data.from == user)
+            .map(|t| t.data.amount)
+            .sum()
     }
 }
 
 #[derive(Debug)]
 pub enum BlockValidationError {
     PrevHashMismatch,
-    BlockNotMinedCorrectly,
+    NotMinedCorrectly,
     ExcessiveTransactionAmount,
     InvalidTransactionSignature,
-    InvalidTimestamp
+    InvalidTimestamp,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -48,13 +52,20 @@ pub struct Blockchain {
     pub blocks: Vec<Block>,
     pub balances: HashMap<[u8; PUBLIC_KEY_LENGTH], u64>,
     pub cur_dif: u32,
-    pub weight: u32
+    pub weight: u32,
 }
 
 impl core::fmt::Debug for Blockchain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Blockchain with {} blocks, {:?} balances, active difficulty {} and weight of {}",
-               self.blocks.len(), self.balances.values(), self.cur_dif, self.weight)
+        write!(
+            f,
+            "Blockchain with {} blocks, {} transactions, {:?} balances, active difficulty {} and weight of {}",
+            self.blocks.len(),
+            self.blocks.iter().map(|x| x.transactions.len()).sum::<usize>(),
+            self.balances.values(),
+            self.cur_dif,
+            self.weight
+        )
     }
 }
 
@@ -69,11 +80,10 @@ impl Blockchain {
 
     pub fn difficulty(&self, block: &Block) -> u32 {
         if let Some(lblock) = self.blocks.last() {
-            let dif_offset = calculate_dif_offset(block.timestamp-lblock.timestamp);
-            let answer = (self.cur_dif as i32+dif_offset).max(0);
+            let dif_offset = calculate_dif_offset(block.timestamp - lblock.timestamp);
+            let answer = (self.cur_dif as i32 + dif_offset).max(0);
             answer as u32
-        }
-        else {
+        } else {
             0
         }
     }
@@ -88,7 +98,7 @@ impl Blockchain {
                 0.into()
             },
             mined_by,
-            timestamp: now()
+            timestamp: now(),
         }
     }
     pub fn add_block(&mut self, block: Block) -> Result<(), BlockValidationError> {
@@ -104,9 +114,8 @@ impl Blockchain {
         let new_difficulty = self.difficulty(&block);
 
         if !mining::mined(&block, new_difficulty) {
-            return Err(BlockValidationError::BlockNotMinedCorrectly);
+            return Err(BlockValidationError::NotMinedCorrectly);
         }
-
 
         // check transactions
         for transaction in &block.transactions {
@@ -122,9 +131,7 @@ impl Blockchain {
             }
             if let Some(balance) = self.balances.get_mut(pub_kb) {
                 *balance -= transaction.data.amount;
-                println!("New transaction balance: {}", balance);
-            }
-            else {
+            } else {
                 return Err(BlockValidationError::ExcessiveTransactionAmount);
             }
         }
@@ -132,9 +139,9 @@ impl Blockchain {
         for transaction in &block.transactions {
             if let Some(balance) = self.balances.get_mut(transaction.data.to.as_bytes()) {
                 *balance += transaction.data.amount;
-            }
-            else {
-                self.balances.insert(*transaction.data.to.as_bytes(), transaction.data.amount);
+            } else {
+                self.balances
+                    .insert(*transaction.data.to.as_bytes(), transaction.data.amount);
             }
         }
 
@@ -142,18 +149,18 @@ impl Blockchain {
         self.cur_dif = new_difficulty;
 
         let cur_bal = *self.balances.get(block.mined_by.as_bytes()).unwrap_or(&0);
-        self.balances.insert(*block.mined_by.as_bytes(), cur_bal+MINING_REW);
+        self.balances
+            .insert(*block.mined_by.as_bytes(), cur_bal + MINING_REW);
 
         self.blocks.push(block);
 
-        Ok(())   
+        Ok(())
     }
 
     pub fn verify_transaction(&self, transaction: &Transaction) -> bool {
         if let Some(balance) = self.balances.get(transaction.data.from.as_bytes()) {
             balance >= &transaction.data.amount
-        }
-        else {
+        } else {
             false
         }
     }
