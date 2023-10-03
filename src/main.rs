@@ -1,4 +1,4 @@
-use crypto_lib::{future::FusedFuture, *};
+use blockchain_p2p::{future::FusedFuture, *};
 use std::hash::Hash;
 
 use dialoguer::console::Term;
